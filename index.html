@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>消消乐游戏（纯色方块）</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #e0eafc 0%, #cfdef3 100%);
+            font-family: 'Microsoft YaHei', sans-serif;
+        }
+        .game-container {
+            background: rgba(255,255,255,0.95);
+            padding: 24px 24px 16px 24px;
+            border-radius: 18px;
+            box-shadow: 0 8px 32px rgba(60, 120, 200, 0.15);
+        }
+        .game-header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #2d8cf0;
+            margin: 0 0 10px 0;
+            letter-spacing: 2px;
+        }
+        .score-container {
+            font-size: 20px;
+            color: #666;
+        }
+        #gameCanvas {
+            display: block;
+            margin: 0 auto;
+            border-radius: 12px;
+            background: #f7fafc;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        }
+        .controls {
+            margin-top: 20px;
+            text-align: center;
+        }
+        button {
+            background: #2d8cf0;
+            color: white;
+            border: none;
+            padding: 10px 24px;
+            margin: 0 5px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background 0.3s, box-shadow 0.3s;
+            box-shadow: 0 2px 8px rgba(45,140,240,0.08);
+        }
+        button:hover {
+            background: #1a6fb3;
+        }
+        #restartBtn {
+            background: #f44336;
+        }
+        #restartBtn:hover {
+            background: #da190b;
+        }
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <div class="game-header">
+            <h1>消消乐</h1>
+            <div class="score-container">
+                <span>分数：</span>
+                <span id="score">0</span>
+            </div>
+        </div>
+        <canvas id="gameCanvas"></canvas>
+        <div class="controls">
+            <button id="startBtn">开始游戏</button>
+            <button id="restartBtn">重新开始</button>
+        </div>
+    </div>
+    <script>
+const ANIMATION_SPEED = 6; // 越大越快
+class MatchGame {
+    constructor() {
+        this.canvas = document.getElementById('gameCanvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.score = 0;
+        this.gridSize = 8;
+        this.tileSize = 56;
+        // 纯色且区分度高的颜色
+        this.colors = [
+            '#FF3B30', // 红
+            '#FF9500', // 橙
+            '#FFCC00', // 黄
+            '#4CD964', // 绿
+            '#007AFF', // 蓝
+            '#5856D6', // 紫
+            '#FF2D55', // 粉
+            '#34C759'  // 青
+        ];
+        this.grid = [];
+        this.selectedTile = null;
+        this.isSwapping = false;
+        this.animating = false;
+        this.fallingTiles = [];
+        this.canvas.width = this.gridSize * this.tileSize;
+        this.canvas.height = this.gridSize * this.tileSize;
+        this.init();
+        this.setupEventListeners();
+    }
+    init() {
+        this.grid = [];
+        for (let i = 0; i < this.gridSize; i++) {
+            this.grid[i] = [];
+            for (let j = 0; j < this.gridSize; j++) {
+                this.grid[i][j] = {
+                    color: this.getRandomColor(),
+                    falling: false,
+                    yOffset: 0
+                };
+            }
+        }
+        this.draw();
+    }
+    getRandomColor() {
+        return this.colors[Math.floor(Math.random() * this.colors.length)];
+    }
+    draw() {
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        for (let i = 0; i < this.gridSize; i++) {
+            for (let j = 0; j < this.gridSize; j++) {
+                const tile = this.grid[i][j];
+                if (!tile) continue;
+                let y = i * this.tileSize + (tile.yOffset || 0);
+                // 绘制纯色圆角方块
+                this.ctx.save();
+                this.ctx.beginPath();
+                this.roundRect(
+                    j * this.tileSize + 4,
+                    y + 4,
+                    this.tileSize - 8,
+                    this.tileSize - 8,
+                    14
+                );
+                this.ctx.fillStyle = tile.color;
+                this.ctx.shadowColor = 'rgba(0,0,0,0.10)';
+                this.ctx.shadowBlur = 8;
+                this.ctx.fill();
+                this.ctx.restore();
+                // 选中高亮
+                if (this.selectedTile && this.selectedTile.row === i && this.selectedTile.col === j) {
+                    this.ctx.save();
+                    this.ctx.lineWidth = 4;
+                    this.ctx.strokeStyle = '#2d8cf0';
+                    this.ctx.beginPath();
+                    this.roundRect(
+                        j * this.tileSize + 4,
+                        y + 4,
+                        this.tileSize - 8,
+                        this.tileSize - 8,
+                        14
+                    );
+                    this.ctx.stroke();
+                    this.ctx.restore();
+                }
+            }
+        }
+    }
+    roundRect(x, y, w, h, r) {
+        this.ctx.moveTo(x + r, y);
+        this.ctx.arcTo(x + w, y, x + w, y + h, r);
+        this.ctx.arcTo(x + w, y + h, x, y + h, r);
+        this.ctx.arcTo(x, y + h, x, y, r);
+        this.ctx.arcTo(x, y, x + w, y, r);
+    }
+    setupEventListeners() {
+        this.canvas.addEventListener('click', (e) => {
+            if (this.isSwapping || this.animating) return;
+            const rect = this.canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const col = Math.floor(x / this.tileSize);
+            const row = Math.floor(y / this.tileSize);
+            if (this.selectedTile) {
+                if (this.isAdjacent(this.selectedTile, {row, col})) {
+                    this.swapTiles(this.selectedTile, {row, col});
+                }
+                this.selectedTile = null;
+            } else {
+                this.selectedTile = {row, col};
+            }
+            this.draw();
+        });
+        document.getElementById('startBtn').addEventListener('click', () => {
+            this.init();
+            this.score = 0;
+            document.getElementById('score').textContent = this.score;
+        });
+        document.getElementById('restartBtn').addEventListener('click', () => {
+            this.score = 0;
+            document.getElementById('score').textContent = this.score;
+            this.init();
+        });
+    }
+    isAdjacent(tile1, tile2) {
+        const rowDiff = Math.abs(tile1.row - tile2.row);
+        const colDiff = Math.abs(tile1.col - tile2.col);
+        return (rowDiff === 1 && colDiff === 0) || (rowDiff === 0 && colDiff === 1);
+    }
+    async swapTiles(tile1, tile2) {
+        this.isSwapping = true;
+        const temp = this.grid[tile1.row][tile1.col];
+        this.grid[tile1.row][tile1.col] = this.grid[tile2.row][tile2.col];
+        this.grid[tile2.row][tile2.col] = temp;
+        this.draw();
+        await this.sleep(120);
+        if (this.checkMatches()) {
+            await this.animateAndRemoveMatches();
+            this.updateScore();
+            await this.fillEmptySpacesWithAnimation();
+        } else {
+            // 没有匹配，交换回来
+            const temp = this.grid[tile1.row][tile1.col];
+            this.grid[tile1.row][tile1.col] = this.grid[tile2.row][tile2.col];
+            this.grid[tile2.row][tile2.col] = temp;
+            this.draw();
+        }
+        this.isSwapping = false;
+    }
+    checkMatches() {
+        // 检查行匹配
+        for (let i = 0; i < this.gridSize; i++) {
+            for (let j = 0; j < this.gridSize - 2; j++) {
+                if (this.grid[i][j] && this.grid[i][j+1] && this.grid[i][j+2] &&
+                    this.grid[i][j].color === this.grid[i][j+1].color &&
+                    this.grid[i][j].color === this.grid[i][j+2].color) {
+                    return true;
+                }
+            }
+        }
+        // 检查列匹配
+        for (let i = 0; i < this.gridSize - 2; i++) {
+            for (let j = 0; j < this.gridSize; j++) {
+                if (this.grid[i][j] && this.grid[i+1][j] && this.grid[i+2][j] &&
+                    this.grid[i][j].color === this.grid[i+1][j].color &&
+                    this.grid[i][j].color === this.grid[i+2][j].color) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    async animateAndRemoveMatches() {
+        // 标记要移除的方块
+        const toRemove = new Set();
+        // 行
+        for (let i = 0; i < this.gridSize; i++) {
+            for (let j = 0; j < this.gridSize - 2; j++) {
+                if (this.grid[i][j] && this.grid[i][j+1] && this.grid[i][j+2] &&
+                    this.grid[i][j].color === this.grid[i][j+1].color &&
+                    this.grid[i][j].color === this.grid[i][j+2].color) {
+                    toRemove.add(`${i},${j}`);
+                    toRemove.add(`${i},${j+1}`);
+                    toRemove.add(`${i},${j+2}`);
+                }
+            }
+        }
+        // 列
+        for (let i = 0; i < this.gridSize - 2; i++) {
+            for (let j = 0; j < this.gridSize; j++) {
+                if (this.grid[i][j] && this.grid[i+1][j] && this.grid[i+2][j] &&
+                    this.grid[i][j].color === this.grid[i+1][j].color &&
+                    this.grid[i][j].color === this.grid[i+2][j].color) {
+                    toRemove.add(`${i},${j}`);
+                    toRemove.add(`${i+1},${j}`);
+                    toRemove.add(`${i+2},${j}`);
+                }
+            }
+        }
+        // 动画：闪烁消失
+        for (let t = 0; t < 4; t++) {
+            toRemove.forEach(pos => {
+                const [row, col] = pos.split(',').map(Number);
+                if (this.grid[row][col]) {
+                    this.grid[row][col].color = (t % 2 === 0) ? '#fff' : this.getRandomColor();
+                }
+            });
+            this.draw();
+            await this.sleep(60);
+        }
+        // 真正移除
+        toRemove.forEach(pos => {
+            const [row, col] = pos.split(',').map(Number);
+            this.grid[row][col] = null;
+        });
+        this.draw();
+        await this.sleep(80);
+    }
+    async fillEmptySpacesWithAnimation() {
+        let falling = false;
+        do {
+            falling = false;
+            for (let j = 0; j < this.gridSize; j++) {
+                for (let i = this.gridSize - 1; i > 0; i--) {
+                    if (!this.grid[i][j] && this.grid[i-1][j]) {
+                        this.grid[i][j] = this.grid[i-1][j];
+                        this.grid[i-1][j] = null;
+                        this.grid[i][j].yOffset = -this.tileSize;
+                        falling = true;
+                    }
+                }
+            }
+            // 新生成顶部方块
+            for (let j = 0; j < this.gridSize; j++) {
+                if (!this.grid[0][j]) {
+                    this.grid[0][j] = {
+                        color: this.getRandomColor(),
+                        falling: true,
+                        yOffset: -this.tileSize
+                    };
+                    falling = true;
+                }
+            }
+            // 动画下落
+            let animating = true;
+            while (animating) {
+                animating = false;
+                for (let i = 0; i < this.gridSize; i++) {
+                    for (let j = 0; j < this.gridSize; j++) {
+                        const tile = this.grid[i][j];
+                        if (tile && tile.yOffset < 0) {
+                            tile.yOffset += ANIMATION_SPEED;
+                            if (tile.yOffset > 0) tile.yOffset = 0;
+                            animating = true;
+                        }
+                    }
+                }
+                this.draw();
+                await this.sleep(12);
+            }
+        } while (falling);
+        // 检查是否还有新的匹配
+        if (this.checkMatches()) {
+            await this.animateAndRemoveMatches();
+            this.updateScore();
+            await this.fillEmptySpacesWithAnimation();
+        }
+    }
+    updateScore() {
+        this.score += 10;
+        document.getElementById('score').textContent = this.score;
+    }
+    sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+}
+window.onload = () => {
+    new MatchGame();
+};
+    </script>
+</body>
+</html> 
