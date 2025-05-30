@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>消消乐游戏（纯色方块）</title>
+    <title>消消乐游戏（高区分度+特殊方块）</title>
     <style>
         body {
             margin: 0;
@@ -81,10 +81,17 @@
         <div class="controls">
             <button id="startBtn">开始游戏</button>
             <button id="restartBtn">重新开始</button>
+            <button id="hintBtn">提示</button>
         </div>
     </div>
     <script>
-const ANIMATION_SPEED = 6; // 越大越快
+const ANIMATION_SPEED = 6;
+const TILE_TYPES = {
+    NORMAL: 'normal',
+    ROW: 'row',
+    COL: 'col',
+    CROSS: 'cross'
+};
 class MatchGame {
     constructor() {
         this.canvas = document.getElementById('gameCanvas');
@@ -92,24 +99,25 @@ class MatchGame {
         this.score = 0;
         this.gridSize = 8;
         this.tileSize = 56;
-        // 纯色且区分度高的颜色
+        // 高区分度纯色
         this.colors = [
-            '#FF3B30', // 红
-            '#FF9500', // 橙
-            '#FFCC00', // 黄
-            '#4CD964', // 绿
-            '#007AFF', // 蓝
-            '#5856D6', // 紫
-            '#FF2D55', // 粉
-            '#34C759'  // 青
+            '#E53935', // 红
+            '#8E24AA', // 紫
+            '#3949AB', // 蓝
+            '#00897B', // 青
+            '#43A047', // 绿
+            '#FDD835', // 黄
+            '#FB8C00', // 橙
+            '#6D4C41'  // 棕
         ];
         this.grid = [];
         this.selectedTile = null;
         this.isSwapping = false;
         this.animating = false;
-        this.fallingTiles = [];
         this.canvas.width = this.gridSize * this.tileSize;
         this.canvas.height = this.gridSize * this.tileSize;
+        this.hintTiles = null;
+        this.gameOver = false;
         this.init();
         this.setupEventListeners();
     }
@@ -118,17 +126,36 @@ class MatchGame {
         for (let i = 0; i < this.gridSize; i++) {
             this.grid[i] = [];
             for (let j = 0; j < this.gridSize; j++) {
-                this.grid[i][j] = {
-                    color: this.getRandomColor(),
-                    falling: false,
-                    yOffset: 0
-                };
+                this.grid[i][j] = this.getNoThreeColor(i, j);
             }
         }
+        this.hintTiles = null;
+        this.gameOver = false;
         this.draw();
     }
-    getRandomColor() {
-        return this.colors[Math.floor(Math.random() * this.colors.length)];
+    getNoThreeColor(i, j) {
+        // 生成不会导致三连的颜色
+        let available = [...this.colors];
+        // 检查左侧和上方
+        if (j >= 2 && this.grid[i][j-1] && this.grid[i][j-2] && this.grid[i][j-1].color === this.grid[i][j-2].color) {
+            available = available.filter(c => c !== this.grid[i][j-1].color);
+        }
+        if (i >= 2 && this.grid[i-1] && this.grid[i-2] && this.grid[i-1][j] && this.grid[i-2][j] && this.grid[i-1][j].color === this.grid[i-2][j].color) {
+            available = available.filter(c => c !== this.grid[i-1][j].color);
+        }
+        // 尽量让棋盘有可消除
+        if (Math.random() < 0.5) {
+            // 尝试生成与左侧或上方相同的颜色
+            let candidates = [];
+            if (j > 0) candidates.push(this.grid[i][j-1].color);
+            if (i > 0) candidates.push(this.grid[i-1][j].color);
+            candidates = candidates.filter(c => available.includes(c));
+            if (candidates.length > 0 && Math.random() < 0.7) {
+                return {color: candidates[Math.floor(Math.random()*candidates.length)], type: TILE_TYPES.NORMAL, yOffset: 0};
+            }
+        }
+        // 随机选一个剩余颜色
+        return {color: available[Math.floor(Math.random()*available.length)], type: TILE_TYPES.NORMAL, yOffset: 0};
     }
     draw() {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
@@ -151,6 +178,20 @@ class MatchGame {
                 this.ctx.shadowColor = 'rgba(0,0,0,0.10)';
                 this.ctx.shadowBlur = 8;
                 this.ctx.fill();
+                // 特殊方块标志
+                if (tile.type !== TILE_TYPES.NORMAL) {
+                    this.ctx.save();
+                    this.ctx.font = 'bold 22px Arial';
+                    this.ctx.textAlign = 'center';
+                    this.ctx.textBaseline = 'middle';
+                    this.ctx.fillStyle = '#fff';
+                    let cx = j * this.tileSize + this.tileSize / 2;
+                    let cy = y + this.tileSize / 2;
+                    if (tile.type === TILE_TYPES.ROW) this.ctx.fillText('→', cx, cy);
+                    if (tile.type === TILE_TYPES.COL) this.ctx.fillText('↓', cx, cy);
+                    if (tile.type === TILE_TYPES.CROSS) this.ctx.fillText('✚', cx, cy);
+                    this.ctx.restore();
+                }
                 this.ctx.restore();
                 // 选中高亮
                 if (this.selectedTile && this.selectedTile.row === i && this.selectedTile.col === j) {
@@ -167,6 +208,26 @@ class MatchGame {
                     );
                     this.ctx.stroke();
                     this.ctx.restore();
+                }
+                // 高亮提示
+                if (this.hintTiles) {
+                    for (const [hr, hc] of this.hintTiles) {
+                        if (i === hr && j === hc) {
+                            this.ctx.save();
+                            this.ctx.lineWidth = 5;
+                            this.ctx.strokeStyle = '#FFD600';
+                            this.ctx.beginPath();
+                            this.roundRect(
+                                j * this.tileSize + 4,
+                                y + 4,
+                                this.tileSize - 8,
+                                this.tileSize - 8,
+                                14
+                            );
+                            this.ctx.stroke();
+                            this.ctx.restore();
+                        }
+                    }
                 }
             }
         }
@@ -206,6 +267,11 @@ class MatchGame {
             document.getElementById('score').textContent = this.score;
             this.init();
         });
+        document.getElementById('hintBtn').addEventListener('click', () => {
+            if (this.gameOver) return;
+            this.hintTiles = this.findHint();
+            this.draw();
+        });
     }
     isAdjacent(tile1, tile2) {
         const rowDiff = Math.abs(tile1.row - tile2.row);
@@ -213,93 +279,142 @@ class MatchGame {
         return (rowDiff === 1 && colDiff === 0) || (rowDiff === 0 && colDiff === 1);
     }
     async swapTiles(tile1, tile2) {
+        if (this.gameOver) return;
         this.isSwapping = true;
         const temp = this.grid[tile1.row][tile1.col];
         this.grid[tile1.row][tile1.col] = this.grid[tile2.row][tile2.col];
         this.grid[tile2.row][tile2.col] = temp;
+        this.hintTiles = null;
         this.draw();
         await this.sleep(120);
         if (this.checkMatches()) {
-            await this.animateAndRemoveMatches();
+            await this.animateAndRemoveMatches(true, [tile1, tile2]);
             this.updateScore();
             await this.fillEmptySpacesWithAnimation();
         } else {
-            // 没有匹配，交换回来
-            const temp = this.grid[tile1.row][tile1.col];
+            // 不能消除则交换回来
+            const temp2 = this.grid[tile1.row][tile1.col];
             this.grid[tile1.row][tile1.col] = this.grid[tile2.row][tile2.col];
-            this.grid[tile2.row][tile2.col] = temp;
+            this.grid[tile2.row][tile2.col] = temp2;
             this.draw();
+            await this.sleep(120);
+            if (!this.findHint()) {
+                this.gameOver = true;
+                setTimeout(()=>{
+                    alert('没有可以消除的方块，游戏结束');
+                }, 100);
+            }
         }
         this.isSwapping = false;
     }
     checkMatches() {
-        // 检查行匹配
+        // 检查所有匹配，返回匹配信息
+        let matches = [];
+        // 行匹配
         for (let i = 0; i < this.gridSize; i++) {
-            for (let j = 0; j < this.gridSize - 2; j++) {
-                if (this.grid[i][j] && this.grid[i][j+1] && this.grid[i][j+2] &&
-                    this.grid[i][j].color === this.grid[i][j+1].color &&
-                    this.grid[i][j].color === this.grid[i][j+2].color) {
-                    return true;
+            let count = 1;
+            for (let j = 1; j < this.gridSize; j++) {
+                if (this.grid[i][j] && this.grid[i][j-1] && this.grid[i][j].color === this.grid[i][j-1].color) {
+                    count++;
+                } else {
+                    if (count >= 3) matches.push({type:'row',row:i,col:j-count,len:count});
+                    count = 1;
                 }
             }
+            if (count >= 3) matches.push({type:'row',row:i,col:this.gridSize-count,len:count});
         }
-        // 检查列匹配
-        for (let i = 0; i < this.gridSize - 2; i++) {
-            for (let j = 0; j < this.gridSize; j++) {
-                if (this.grid[i][j] && this.grid[i+1][j] && this.grid[i+2][j] &&
-                    this.grid[i][j].color === this.grid[i+1][j].color &&
-                    this.grid[i][j].color === this.grid[i+2][j].color) {
-                    return true;
+        // 列匹配
+        for (let j = 0; j < this.gridSize; j++) {
+            let count = 1;
+            for (let i = 1; i < this.gridSize; i++) {
+                if (this.grid[i][j] && this.grid[i-1][j] && this.grid[i][j].color === this.grid[i-1][j].color) {
+                    count++;
+                } else {
+                    if (count >= 3) matches.push({type:'col',row:i-count,col:j,len:count});
+                    count = 1;
                 }
             }
+            if (count >= 3) matches.push({type:'col',row:this.gridSize-count,col:j,len:count});
         }
-        return false;
+        return matches.length > 0 ? matches : false;
     }
-    async animateAndRemoveMatches() {
-        // 标记要移除的方块
+    async animateAndRemoveMatches(triggeredByUser = false, userSwapTiles = null) {
+        let matches = this.checkMatches();
+        if (!matches) return;
         const toRemove = new Set();
-        // 行
-        for (let i = 0; i < this.gridSize; i++) {
-            for (let j = 0; j < this.gridSize - 2; j++) {
-                if (this.grid[i][j] && this.grid[i][j+1] && this.grid[i][j+2] &&
-                    this.grid[i][j].color === this.grid[i][j+1].color &&
-                    this.grid[i][j].color === this.grid[i][j+2].color) {
-                    toRemove.add(`${i},${j}`);
-                    toRemove.add(`${i},${j+1}`);
-                    toRemove.add(`${i},${j+2}`);
+        const specials = [];
+        const originalColors = {};
+        let specialTriggered = [];
+        const tileMatchType = {};
+        matches.forEach(match => {
+            for (let k = 0; k < match.len; k++) {
+                let r = match.type === 'row' ? match.row : match.row + k;
+                let c = match.type === 'row' ? match.col + k : match.col;
+                toRemove.add(`${r},${c}`);
+                if (!originalColors[`${r},${c}`] && this.grid[r][c]) {
+                    originalColors[`${r},${c}`] = this.grid[r][c].color;
+                }
+                if (!tileMatchType[`${r},${c}`]) tileMatchType[`${r},${c}`] = [];
+                tileMatchType[`${r},${c}`].push(match.type);
+                if (triggeredByUser && this.grid[r][c] && this.grid[r][c].type !== TILE_TYPES.NORMAL) {
+                    specialTriggered.push({row:r, col:c, type:this.grid[r][c].type, color:this.grid[r][c].color});
                 }
             }
-        }
-        // 列
-        for (let i = 0; i < this.gridSize - 2; i++) {
-            for (let j = 0; j < this.gridSize; j++) {
-                if (this.grid[i][j] && this.grid[i+1][j] && this.grid[i+2][j] &&
-                    this.grid[i][j].color === this.grid[i+1][j].color &&
-                    this.grid[i][j].color === this.grid[i+2][j].color) {
-                    toRemove.add(`${i},${j}`);
-                    toRemove.add(`${i+1},${j}`);
-                    toRemove.add(`${i+2},${j}`);
+        });
+        // 只生成横排或竖列的特殊方块（不再生成十字）
+        matches.forEach(match => {
+            if (match.len >= 4) {
+                // 只在中心生成特殊方块
+                if (match.type === 'row') {
+                    let center = match.col + Math.floor((match.len - 1) / 2);
+                    specials.push({row: match.row, col: center, type: TILE_TYPES.ROW, color: originalColors[`${match.row},${center}`]});
+                } else if (match.type === 'col') {
+                    let center = match.row + Math.floor((match.len - 1) / 2);
+                    specials.push({row: center, col: match.col, type: TILE_TYPES.COL, color: originalColors[`${center},${match.col}`]});
                 }
             }
-        }
+        });
+        // 横纵交叉才生成十字消除
+        Object.keys(tileMatchType).forEach(pos => {
+            const [r, c] = pos.split(',').map(Number);
+            const types = tileMatchType[pos];
+            if (types.includes('row') && types.includes('col')) {
+                specials.push({row:r, col:c, type:TILE_TYPES.CROSS, color:originalColors[pos]});
+            }
+        });
         // 动画：闪烁消失
         for (let t = 0; t < 4; t++) {
             toRemove.forEach(pos => {
                 const [row, col] = pos.split(',').map(Number);
                 if (this.grid[row][col]) {
-                    this.grid[row][col].color = (t % 2 === 0) ? '#fff' : this.getRandomColor();
+                    this.grid[row][col].color = (t % 2 === 0) ? '#fff' : originalColors[pos];
                 }
             });
             this.draw();
             await this.sleep(60);
         }
-        // 真正移除
+        // 真正移除并生成特殊方块
         toRemove.forEach(pos => {
             const [row, col] = pos.split(',').map(Number);
             this.grid[row][col] = null;
         });
+        specials.forEach(s => {
+            this.grid[s.row][s.col] = {color:s.color,type:s.type,yOffset:0};
+        });
         this.draw();
         await this.sleep(80);
+        // 计分：每消除一个方块加10分
+        this.addScore(toRemove.size);
+        // 只有玩家主动触发时才触发特殊方块
+        if (triggeredByUser && specialTriggered.length > 0) {
+            for (const s of specialTriggered) {
+                let specialRemoved = await this.triggerSpecial(s.row, s.col, s.type, s.color);
+                this.addScore(specialRemoved);
+                this.grid[s.row][s.col] = null;
+            }
+            this.draw();
+            await this.sleep(80);
+        }
     }
     async fillEmptySpacesWithAnimation() {
         let falling = false;
@@ -315,18 +430,12 @@ class MatchGame {
                     }
                 }
             }
-            // 新生成顶部方块
             for (let j = 0; j < this.gridSize; j++) {
                 if (!this.grid[0][j]) {
-                    this.grid[0][j] = {
-                        color: this.getRandomColor(),
-                        falling: true,
-                        yOffset: -this.tileSize
-                    };
+                    this.grid[0][j] = this.getSmartDropColor(0, j);
                     falling = true;
                 }
             }
-            // 动画下落
             let animating = true;
             while (animating) {
                 animating = false;
@@ -344,19 +453,104 @@ class MatchGame {
                 await this.sleep(12);
             }
         } while (falling);
-        // 检查是否还有新的匹配
         if (this.checkMatches()) {
-            await this.animateAndRemoveMatches();
+            await this.animateAndRemoveMatches(false);
             this.updateScore();
             await this.fillEmptySpacesWithAnimation();
+        } else {
+            if (!this.findHint()) {
+                this.gameOver = true;
+                setTimeout(()=>{
+                    alert('没有可以消除的方块，游戏结束');
+                }, 100);
+            }
         }
     }
-    updateScore() {
-        this.score += 10;
+    getSmartDropColor(i, j) {
+        // 尽量生成能与下方或左右形成三连的颜色
+        let available = [...this.colors];
+        // 检查下方
+        if (i+2 < this.gridSize && this.grid[i+1][j] && this.grid[i+2][j] && this.grid[i+1][j].color === this.grid[i+2][j].color) {
+            available.push(this.grid[i+1][j].color);
+        }
+        // 检查左右
+        if (j > 0 && this.grid[i][j-1]) available.push(this.grid[i][j-1].color);
+        if (j < this.gridSize-1 && this.grid[i][j+1]) available.push(this.grid[i][j+1].color);
+        // 增加生成三连的概率
+        if (Math.random() < 0.5) {
+            let candidates = available.filter((c, idx, arr) => arr.indexOf(c) === idx);
+            if (candidates.length > 0 && Math.random() < 0.7) {
+                return {color: candidates[Math.floor(Math.random()*candidates.length)], type: TILE_TYPES.NORMAL, yOffset: -this.tileSize};
+            }
+        }
+        // 随机选一个
+        return {color: this.colors[Math.floor(Math.random()*this.colors.length)], type: TILE_TYPES.NORMAL, yOffset: -this.tileSize};
+    }
+    async triggerSpecial(row, col, type, color) {
+        // 横排、竖列、十字消除
+        let removed = new Set();
+        if (type === TILE_TYPES.ROW) {
+            for (let j = 0; j < this.gridSize; j++) {
+                if (this.grid[row][j]) {
+                    this.grid[row][j] = null;
+                    removed.add(`${row},${j}`);
+                }
+            }
+        } else if (type === TILE_TYPES.COL) {
+            for (let i = 0; i < this.gridSize; i++) {
+                if (this.grid[i][col]) {
+                    this.grid[i][col] = null;
+                    removed.add(`${i},${col}`);
+                }
+            }
+        } else if (type === TILE_TYPES.CROSS) {
+            for (let j = 0; j < this.gridSize; j++) {
+                if (this.grid[row][j]) {
+                    this.grid[row][j] = null;
+                    removed.add(`${row},${j}`);
+                }
+            }
+            for (let i = 0; i < this.gridSize; i++) {
+                if (this.grid[i][col]) {
+                    this.grid[i][col] = null;
+                    removed.add(`${i},${col}`);
+                }
+            }
+        }
+        this.draw();
+        await this.sleep(200);
+        return removed.size;
+    }
+    addScore(count) {
+        this.score += count * 10;
         document.getElementById('score').textContent = this.score;
     }
     sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
+    }
+    findHint() {
+        // 检查所有相邻交换后是否有消除
+        for (let i = 0; i < this.gridSize; i++) {
+            for (let j = 0; j < this.gridSize; j++) {
+                for (const [di, dj] of [[0,1],[1,0]]) {
+                    let ni = i + di, nj = j + dj;
+                    if (ni < this.gridSize && nj < this.gridSize) {
+                        this.swapGrid(i, j, ni, nj);
+                        if (this.checkMatches()) {
+                            this.swapGrid(i, j, ni, nj);
+                            return [[i,j],[ni,nj]];
+                        }
+                        this.swapGrid(i, j, ni, nj);
+                    }
+                }
+            }
+        }
+        return null;
+    }
+    swapGrid(i1, j1, i2, j2) {
+        const temp = this.grid[i1][j1];
+        this.grid[i1][j1] = this.grid[i2][j2];
+        this.grid[i2][j2] = temp;
     }
 }
 window.onload = () => {
